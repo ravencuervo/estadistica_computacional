@@ -1,0 +1,221 @@
+library(shiny)
+library(ggplot2)
+
+ui <- fluidPage(
+  titlePanel("Análisis Estadístico de Comparación de Medias"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      fileInput("archivo", "Sube tu archivo CSV", accept = ".csv"),
+      
+      radioButtons("separador", "Selecciona el separador del archivo:",
+                   choices = c("Coma" = ",",
+                               "Punto y coma" = ";",
+                               "Tabulación" = "\t",
+                               "Espacio" = " "),
+                   selected = ","),
+      
+      uiOutput("select_columnas"),
+      
+      checkboxInput("var_equal", "¿Asumir varianzas iguales?", TRUE),
+      
+      radioButtons("hipotesis", "Tipo de hipótesis:",
+                   choices = c("Bilateral" = "two.sided",
+                               "Menor" = "less",
+                               "Mayor" = "greater"),
+                   selected = "two.sided")
+    ),
+    
+    mainPanel(
+      tabsetPanel(
+        tabPanel("📝 Datos",
+                 h4("Vista previa de los datos:"),
+                 tableOutput("tabla"),
+                 
+                 h4("Columnas seleccionadas:"),
+                 verbatimTextOutput("info_columnas")
+        ),
+        
+        tabPanel("📊 Resultados",
+                 h4("Resultado de la Prueba:"),
+                 verbatimTextOutput("resultado")
+        ),
+        
+        tabPanel("📈 Gráfico",
+                 h4("Gráfico de Boxplot:"),
+                 plotOutput("boxplot")
+        )
+      )
+    )
+  )
+)
+
+server <- function(input, output) {
+  
+  leer_datos <- reactive({
+    req(input$archivo, input$separador)
+    
+    df <- read.csv(input$archivo$datapath,
+                   sep = input$separador,
+                   stringsAsFactors = FALSE)
+    return(df)
+  })
+  
+  output$select_columnas <- renderUI({
+    req(leer_datos())
+    columnas <- names(leer_datos())
+    
+    tagList(
+      helpText("Selecciona la variable numérica (valor) y la categórica (grupo):"),
+      selectInput("col_valor", "Variable numérica:", choices = columnas),
+      selectInput("col_grupo", "Variable categórica:", choices = columnas)
+    )
+  })
+  
+  datos <- reactive({
+    req(leer_datos(), input$col_valor, input$col_grupo)
+    
+    df <- leer_datos()
+    
+    if (!is.numeric(df[[input$col_valor]])) {
+      stop("⚠️ La columna seleccionada como 'valor' no es numérica.")
+    }
+    
+    df$valor <- df[[input$col_valor]]
+    df$grupo <- as.factor(df[[input$col_grupo]])
+    
+    attr(df, "valor_col") <- input$col_valor
+    attr(df, "grupo_col") <- input$col_grupo
+    
+    return(df)
+  })
+  
+  output$tabla <- renderTable({
+    req(datos())
+    df <- datos()
+    df_mostrar <- df[, c(attr(df, "valor_col"), attr(df, "grupo_col"))]
+    head(df_mostrar)
+  })
+  
+  output$info_columnas <- renderPrint({
+    req(datos())
+    cat("📊 Variable numérica seleccionada:", attr(datos(), "valor_col"), "\n")
+    cat("🧬 Variable categórica seleccionada:", attr(datos(), "grupo_col"))
+  })
+  
+  output$resultado <- renderPrint({
+    tryCatch({
+      req(datos())
+      num_grupos <- length(levels(datos()$grupo))
+      
+      if (num_grupos == 2) {
+        t_resultado <- t.test(valor ~ grupo,
+                              data = datos(),
+                              alternative = input$hipotesis,
+                              var.equal = input$var_equal)
+        
+        cat("**Estadísticas Descriptivas - T-test:**\n")
+        cat("========================================\n")
+        cat("Grupo 1: Media =", round(mean(datos()$valor[datos()$grupo == levels(datos()$grupo)[1]]), 2), ", Desviación Estándar =", round(sd(datos()$valor[datos()$grupo == levels(datos()$grupo)[1]]), 2), "\n")
+        cat("Grupo 2: Media =", round(mean(datos()$valor[datos()$grupo == levels(datos()$grupo)[2]]), 2), ", Desviación Estándar =", round(sd(datos()$valor[datos()$grupo == levels(datos()$grupo)[2]]), 2), "\n")
+        
+        cat("\n**Resultado T-test:**\n")
+        cat("====================================\n")
+        cat("Valor p del T-test:", round(t_resultado$p.value, 4), "\n")
+        cat("Estadístico t:", round(t_resultado$statistic, 2), "\n")
+        
+        cat("\n**Interpretación de T-test:**\n")
+        if (t_resultado$p.value < 0.05) {
+          cat("El valor p es menor a 0.05, por lo que **rechazamos** la hipótesis nula y concluimos que hay diferencias significativas entre los grupos.\n")
+        } else {
+          cat("El valor p es mayor a 0.05, por lo que **no rechazamos** la hipótesis nula y concluimos que no hay diferencias significativas entre los grupos.\n")
+        }
+        
+      } else if (num_grupos >= 3) {
+        modelo <- aov(valor ~ grupo, data = datos())
+        
+        cat("**Resumen:**\n")
+        cat("========================================\n")
+        for (g in levels(datos()$grupo)) {
+          cuenta <- sum(datos()$grupo == g)
+          suma <- sum(datos()$valor[datos()$grupo == g])
+          promedio <- mean(datos()$valor[datos()$grupo == g])
+          varianza <- var(datos()$valor[datos()$grupo == g])
+          
+          cat(paste("Tratamiento", g, ": Cuenta =", cuenta, ", Suma =", suma, ", Promedio =", round(promedio, 2), ", Varianza =", round(varianza, 2), "\n"))
+        }
+        
+        cat("\n**ANÁLISIS DE VARIANZA:**\n")
+        cat("========================================\n")
+        
+        resultado_anova <- summary(modelo)
+        
+        suma_cuadrados_entre <- sum(resultado_anova[[1]]$`Sum Sq`[1])
+        suma_cuadrados_dentro <- sum(resultado_anova[[1]]$`Sum Sq`[2])
+        grados_libertad_entre <- length(levels(datos()$grupo)) - 1
+        grados_libertad_dentro <- length(datos()$valor) - length(levels(datos()$grupo))
+        promedio_cuadrados_entre <- suma_cuadrados_entre / grados_libertad_entre
+        promedio_cuadrados_dentro <- suma_cuadrados_dentro / grados_libertad_dentro
+        estadistico_F <- promedio_cuadrados_entre / promedio_cuadrados_dentro
+        valor_p_anova <- resultado_anova[[1]]$`Pr(>F)`[1]
+        valor_critico_F <- qf(0.95, grados_libertad_entre, grados_libertad_dentro)
+        
+        cat("Origen de las variaciones\n")
+        cat("========================================\n")
+        cat(paste("Entre grupos:\nSuma de cuadrados =", round(suma_cuadrados_entre, 2), 
+                  "\nGrados de libertad =", grados_libertad_entre,
+                  "\nPromedio de los cuadrados =", round(promedio_cuadrados_entre, 2), 
+                  "\nF =", round(estadistico_F, 2), 
+                  "\nProbabilidad =", round(valor_p_anova, 4),
+                  "\nValor crítico para F =", round(valor_critico_F, 2), "\n"))
+        cat(paste("\nDentro de los grupos:\nSuma de cuadrados =", round(suma_cuadrados_dentro, 2),
+                  "\nGrados de libertad =", grados_libertad_dentro,
+                  "\nPromedio de los cuadrados =", round(promedio_cuadrados_dentro, 2), "\n"))
+        
+        cat("\nTotal: Suma de cuadrados =", round(suma_cuadrados_entre + suma_cuadrados_dentro, 2), 
+            ", Grados de libertad =", grados_libertad_entre + grados_libertad_dentro, "\n")
+        
+        cat("\n**Interpretación de ANOVA:**\n")
+        if (estadistico_F > valor_critico_F) {
+          cat("El valor F calculado (", round(estadistico_F, 2), ") es mayor que el valor crítico F (", round(valor_critico_F, 2), ").\n")
+          cat("Esto significa que hay diferencias significativas entre al menos uno de los grupos.\n")
+          cat("Por lo tanto, **rechazamos** la hipótesis nula de que todas las medias de los grupos son iguales.\n")
+        } else {
+          cat("El valor F calculado (", round(estadistico_F, 2), ") es menor que el valor crítico F (", round(valor_critico_F, 2), ").\n")
+          cat("Esto significa que **no rechazamos** la hipótesis nula y concluimos que no hay diferencias significativas entre los grupos.\n")
+        }
+        
+        cat("\n**Resultado de Tukey (comparación entre grupos):**\n")
+        cat("====================================\n")
+        tukey_resultado <- TukeyHSD(modelo)
+        
+        resumen_tukey <- tukey_resultado$grupo
+        colnames(resumen_tukey) <- c("Diferencia de medias", "Límite Inferior", "Límite Superior", "p ajustado")
+        
+        print(resumen_tukey)
+        
+        cat("\n**Interpretación de Tukey:**\n")
+        cat("Si el valor p de Tukey es menor a 0.05, hay diferencias significativas entre los grupos comparados.\n")
+        
+      } else {
+        cat("⚠️ Debe haber al menos 2 grupos para hacer la comparación.\n")
+      }
+      
+    }, error = function(e) {
+      cat("⚠️ Datos en espera:", e$message)
+    })
+  })
+  
+  
+  
+  output$boxplot <- renderPlot({
+    req(datos())
+    ggplot(datos(), aes(x = grupo, y = valor, fill = grupo)) +
+      geom_boxplot(alpha = 0.8, color = "black", outlier.color = "red") +
+      scale_fill_brewer(palette = "Set2") +
+      labs(title = "Distribución de los Grupos", x = "Grupo", y = "Valor") +
+      theme_minimal(base_size = 14)
+  })
+}
+
+shinyApp(ui = ui, server = server)
