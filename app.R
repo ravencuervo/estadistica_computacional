@@ -1,221 +1,414 @@
 library(shiny)
+library(shinydashboard)
+library(DT)
 library(ggplot2)
+library(nortest)
+library(car)
+library(psych)
+library(moments)
 
-ui <- fluidPage(
-  titlePanel("Análisis Estadístico de Comparación de Medias"),
-  
-  sidebarLayout(
-    sidebarPanel(
-      fileInput("archivo", "Sube tu archivo CSV", accept = ".csv"),
+ui <- dashboardPage(
+  dashboardHeader(title = "Análisis Datos Cuantitativos"),
+  dashboardSidebar(
+    sidebarMenu(
+      menuItem("Cargar Datos", tabName = "datos", icon = icon("database")),
+      menuItem("Estadística Descriptiva", tabName = "descriptiva", icon = icon("chart-bar")),
+      menuItem("Distribución y Normalidad", tabName = "normalidad", icon = icon("bell")),
+      menuItem("Comparación de Grupos", tabName = "comparacion", icon = icon("not-equal")),
+      menuItem("Correlación y Regresión", tabName = "regresion", icon = icon("project-diagram"))
+    )
+  ),
+  dashboardBody(
+    tabItems(
+      tabItem(tabName = "datos",
+              fluidRow(
+                box(title = "Cargar Datos", width = 12,
+                    fileInput("file1", "Seleccione archivo CSV",
+                              accept = c("text/csv",
+                                         "text/comma-separated-values,text/plain",
+                                         ".csv")),
+                    checkboxInput("header", "Encabezado", TRUE),
+                    radioButtons("sep", "Separador",
+                                 choices = c(Coma = ",",
+                                             PuntoComa = ";",
+                                             Tabulador = "\t"),
+                                 selected = ","),
+                    radioButtons("quote", "Comillas",
+                                 choices = c(Ninguna = "",
+                                             "Doble" = '"',
+                                             "Simple" = "'"),
+                                 selected = '"')
+                ),
+                box(title = "Vista previa", width = 12,
+                    DTOutput("contents")
+                )
+              )
+      ),
       
-      radioButtons("separador", "Selecciona el separador del archivo:",
-                   choices = c("Coma" = ",",
-                               "Punto y coma" = ";",
-                               "Tabulación" = "\t",
-                               "Espacio" = " "),
-                   selected = ","),
+      tabItem(tabName = "descriptiva",
+              fluidRow(
+                box(title = "Opciones Descriptivas", width = 4,
+                    selectInput("var_cuanti", "Seleccione variable cuantitativa:", choices = NULL),
+                    checkboxGroupInput("estadisticos", "Estadísticos a mostrar:",
+                                       choices = c("Medidas de tendencia central" = "central",
+                                                   "Medidas de dispersión" = "dispersion",
+                                                   "Medidas de forma" = "forma",
+                                                   "Cuartiles y percentiles" = "cuantiles"),
+                                       selected = c("central", "dispersion")),
+                    radioButtons("tipo_grafico", "Tipo de gráfico:",
+                                 choices = c("Histograma" = "hist",
+                                             "Boxplot" = "box",
+                                             "Densidad" = "dens",
+                                             "Q-Q Plot" = "qq"),
+                                 selected = "hist")
+                ),
+                box(title = "Resultados Descriptivos", width = 8,
+                    verbatimTextOutput("resumen_descriptivo"),
+                    plotOutput("grafico_descriptivo"),
+                    DTOutput("tabla_descriptiva")
+                )
+              )
+      ),
       
-      uiOutput("select_columnas"),
+      tabItem(tabName = "normalidad",
+              fluidRow(
+                box(title = "Opciones de Normalidad", width = 4,
+                    selectInput("var_normal", "Variable para análisis de normalidad:", choices = NULL),
+                    radioButtons("prueba_normal", "Prueba de normalidad:",
+                                 choices = c("Shapiro-Wilk" = "shapiro",
+                                             "Kolmogorov-Smirnov" = "ks",
+                                             "Anderson-Darling" = "ad",
+                                             "Lilliefors" = "lillie")),
+                    actionButton("calcular_normal", "Calcular")
+                ),
+                box(title = "Resultados de Normalidad", width = 8,
+                    verbatimTextOutput("resultado_normalidad"),
+                    plotOutput("grafico_normalidad")
+                )
+              )
+      ),
       
-      checkboxInput("var_equal", "¿Asumir varianzas iguales?", TRUE),
+      tabItem(tabName = "comparacion",
+              fluidRow(
+                box(title = "Opciones de Comparación", width = 4,
+                    selectInput("var_resp", "Variable respuesta:", choices = NULL),
+                    selectInput("var_grupo", "Variable de agrupación:", choices = NULL),
+                    radioButtons("prueba_comp", "Prueba estadística:",
+                                 choices = c("t-test (2 grupos)" = "t.test",
+                                             "ANOVA (múltiples grupos)" = "anova",
+                                             "Welch (varianzas desiguales)" = "welch",
+                                             "Kruskal-Wallis (no paramétrico)" = "kruskal")),
+                    conditionalPanel(
+                      condition = "input.prueba_comp == 't.test'",
+                      radioButtons("tipo_t", "Tipo de t-test:",
+                                   choices = c("Muestras independientes" = "indep",
+                                               "Muestras pareadas" = "pareado"))
+                    ),
+                    actionButton("calcular_comp", "Calcular")
+                ),
+                box(title = "Resultados de Comparación", width = 8,
+                    verbatimTextOutput("resultado_comparacion"),
+                    plotOutput("grafico_comparacion")
+                )
+              )
+      ),
       
-      radioButtons("hipotesis", "Tipo de hipótesis:",
-                   choices = c("Bilateral" = "two.sided",
-                               "Menor" = "less",
-                               "Mayor" = "greater"),
-                   selected = "two.sided")
-    ),
-    
-    mainPanel(
-      tabsetPanel(
-        tabPanel("📝 Datos",
-                 h4("Vista previa de los datos:"),
-                 tableOutput("tabla"),
-                 
-                 h4("Columnas seleccionadas:"),
-                 verbatimTextOutput("info_columnas")
-        ),
-        
-        tabPanel("📊 Resultados",
-                 h4("Resultado de la Prueba:"),
-                 verbatimTextOutput("resultado")
-        ),
-        
-        tabPanel("📈 Gráfico",
-                 h4("Gráfico de Boxplot:"),
-                 plotOutput("boxplot")
-        )
+      tabItem(tabName = "regresion",
+              fluidRow(
+                box(title = "Opciones de Análisis", width = 4,
+                    selectInput("var_x", "Variable X (predictora):", choices = NULL),
+                    selectInput("var_y", "Variable Y (respuesta):", choices = NULL),
+                    radioButtons("tipo_analisis", "Tipo de análisis:",
+                                 choices = c("Correlación" = "cor",
+                                             "Regresión lineal" = "reg",
+                                             "Gráfico de dispersión" = "disp")),
+                    conditionalPanel(
+                      condition = "input.tipo_analisis == 'cor'",
+                      radioButtons("metodo_cor", "Método de correlación:",
+                                   choices = c("Pearson" = "pearson",
+                                               "Spearman" = "spearman",
+                                               "Kendall" = "kendall"))
+                    ),
+                    actionButton("calcular_reg", "Calcular")
+                ),
+                box(title = "Resultados", width = 8,
+                    verbatimTextOutput("resultado_regresion"),
+                    plotOutput("grafico_regresion")
+                )
+              )
       )
     )
   )
 )
 
-server <- function(input, output) {
-  
-  leer_datos <- reactive({
-    req(input$archivo, input$separador)
-    
-    df <- read.csv(input$archivo$datapath,
-                   sep = input$separador,
-                   stringsAsFactors = FALSE)
-    return(df)
-  })
-  
-  output$select_columnas <- renderUI({
-    req(leer_datos())
-    columnas <- names(leer_datos())
-    
-    tagList(
-      helpText("Selecciona la variable numérica (valor) y la categórica (grupo):"),
-      selectInput("col_valor", "Variable numérica:", choices = columnas),
-      selectInput("col_grupo", "Variable categórica:", choices = columnas)
-    )
-  })
+server <- function(input, output, session) {
   
   datos <- reactive({
-    req(leer_datos(), input$col_valor, input$col_grupo)
-    
-    df <- leer_datos()
-    
-    if (!is.numeric(df[[input$col_valor]])) {
-      stop("⚠️ La columna seleccionada como 'valor' no es numérica.")
-    }
-    
-    df$valor <- df[[input$col_valor]]
-    df$grupo <- as.factor(df[[input$col_grupo]])
-    
-    attr(df, "valor_col") <- input$col_valor
-    attr(df, "grupo_col") <- input$col_grupo
-    
+    req(input$file1)
+    df <- read.csv(input$file1$datapath,
+                   header = input$header,
+                   sep = input$sep,
+                   quote = input$quote)
+    updateSelectInput(session, "var_cuanti", choices = names(df)[sapply(df, is.numeric)])
+    updateSelectInput(session, "var_normal", choices = names(df)[sapply(df, is.numeric)])
+    updateSelectInput(session, "var_resp", choices = names(df)[sapply(df, is.numeric)])
+    updateSelectInput(session, "var_grupo", choices = names(df)[!sapply(df, is.numeric)])
+    updateSelectInput(session, "var_x", choices = names(df)[sapply(df, is.numeric)])
+    updateSelectInput(session, "var_y", choices = names(df)[sapply(df, is.numeric)])
     return(df)
   })
   
-  output$tabla <- renderTable({
-    req(datos())
-    df <- datos()
-    df_mostrar <- df[, c(attr(df, "valor_col"), attr(df, "grupo_col"))]
-    head(df_mostrar)
+  output$contents <- renderDT({
+    datatable(datos(), options = list(scrollX = TRUE))
   })
   
-  output$info_columnas <- renderPrint({
-    req(datos())
-    cat("📊 Variable numérica seleccionada:", attr(datos(), "valor_col"), "\n")
-    cat("🧬 Variable categórica seleccionada:", attr(datos(), "grupo_col"))
+  output$resumen_descriptivo <- renderPrint({
+    req(input$var_cuanti)
+    var <- datos()[[input$var_cuanti]]
+    
+    cat("=== RESUMEN ESTADÍSTICO ===\n\n")
+    
+    if("central" %in% input$estadisticos) {
+      cat("-- Medidas de tendencia central --\n")
+      cat("Media:", mean(var, na.rm = TRUE), "\n")
+      cat("Mediana:", median(var, na.rm = TRUE), "\n")
+      cat("Moda:", names(sort(table(var), decreasing = TRUE))[1], "\n\n")
+    }
+    
+    if("dispersion" %in% input$estadisticos) {
+      cat("-- Medidas de dispersión --\n")
+      cat("Desviación estándar:", sd(var, na.rm = TRUE), "\n")
+      cat("Varianza:", var(var, na.rm = TRUE), "\n")
+      cat("Coeficiente de variación:", sd(var, na.rm = TRUE)/mean(var, na.rm = TRUE)*100, "%\n")
+      cat("Rango:", range(var, na.rm = TRUE), "\n")
+      cat("Rango intercuartílico (IQR):", IQR(var, na.rm = TRUE), "\n\n")
+    }
+    
+    if("forma" %in% input$estadisticos) {
+      cat("-- Medidas de forma --\n")
+      cat("Asimetría (skewness):", skewness(var, na.rm = TRUE), "\n")
+      cat("Curtosis:", kurtosis(var, na.rm = TRUE), "\n\n")
+    }
+    
+    if("cuantiles" %in% input$estadisticos) {
+      cat("-- Cuantiles --\n")
+      print(quantile(var, na.rm = TRUE))
+      cat("\nPercentiles (5%, 25%, 50%, 75%, 95%):\n")
+      print(quantile(var, probs = c(0.05, 0.25, 0.5, 0.75, 0.95), na.rm = TRUE))
+    }
   })
   
-  output$resultado <- renderPrint({
-    tryCatch({
-      req(datos())
-      num_grupos <- length(levels(datos()$grupo))
+  output$grafico_descriptivo <- renderPlot({
+    req(input$var_cuanti)
+    var <- datos()[[input$var_cuanti]]
+    df <- data.frame(valor = var)
+    
+    if(input$tipo_grafico == "hist") {
+      ggplot(df, aes(x = valor)) +
+        geom_histogram(aes(y = ..density..), bins = 30, fill = "steelblue", color = "white") +
+        geom_density(alpha = 0.2, fill = "red") +
+        labs(title = paste("Histograma de", input$var_cuanti), x = input$var_cuanti) +
+        theme_minimal()
+    } else if(input$tipo_grafico == "box") {
+      ggplot(df, aes(y = valor)) +
+        geom_boxplot(fill = "steelblue") +
+        labs(title = paste("Boxplot de", input$var_cuanti), y = input$var_cuanti) +
+        theme_minimal()
+    } else if(input$tipo_grafico == "dens") {
+      ggplot(df, aes(x = valor)) +
+        geom_density(fill = "steelblue", alpha = 0.5) +
+        labs(title = paste("Densidad de", input$var_cuanti), x = input$var_cuanti) +
+        theme_minimal()
+    } else if(input$tipo_grafico == "qq") {
+      ggplot(df, aes(sample = valor)) +
+        stat_qq() + stat_qq_line() +
+        labs(title = paste("Q-Q Plot de", input$var_cuanti)) +
+        theme_minimal()
+    }
+  })
+  
+  output$tabla_descriptiva <- renderDT({
+    req(input$var_cuanti)
+    var <- datos()[[input$var_cuanti]]
+    df <- data.frame(
+      Estadístico = c("Media", "Mediana", "Desviación", "Varianza", "Mínimo", "Máximo", "Asimetría", "Curtosis"),
+      Valor = c(mean(var, na.rm = TRUE),
+                median(var, na.rm = TRUE),
+                sd(var, na.rm = TRUE),
+                var(var, na.rm = TRUE),
+                min(var, na.rm = TRUE),
+                max(var, na.rm = TRUE),
+                skewness(var, na.rm = TRUE),
+                kurtosis(var, na.rm = TRUE))
+    )
+    datatable(df, options = list(dom = 't'))
+  })
+  
+  observeEvent(input$calcular_normal, {
+    output$resultado_normalidad <- renderPrint({
+      req(input$var_normal)
+      var <- datos()[[input$var_normal]]
       
-      if (num_grupos == 2) {
-        t_resultado <- t.test(valor ~ grupo,
-                              data = datos(),
-                              alternative = input$hipotesis,
-                              var.equal = input$var_equal)
-        
-        cat("**Estadísticas Descriptivas - T-test:**\n")
-        cat("========================================\n")
-        cat("Grupo 1: Media =", round(mean(datos()$valor[datos()$grupo == levels(datos()$grupo)[1]]), 2), ", Desviación Estándar =", round(sd(datos()$valor[datos()$grupo == levels(datos()$grupo)[1]]), 2), "\n")
-        cat("Grupo 2: Media =", round(mean(datos()$valor[datos()$grupo == levels(datos()$grupo)[2]]), 2), ", Desviación Estándar =", round(sd(datos()$valor[datos()$grupo == levels(datos()$grupo)[2]]), 2), "\n")
-        
-        cat("\n**Resultado T-test:**\n")
-        cat("====================================\n")
-        cat("Valor p del T-test:", round(t_resultado$p.value, 4), "\n")
-        cat("Estadístico t:", round(t_resultado$statistic, 2), "\n")
-        
-        cat("\n**Interpretación de T-test:**\n")
-        if (t_resultado$p.value < 0.05) {
-          cat("El valor p es menor a 0.05, por lo que **rechazamos** la hipótesis nula y concluimos que hay diferencias significativas entre los grupos.\n")
-        } else {
-          cat("El valor p es mayor a 0.05, por lo que **no rechazamos** la hipótesis nula y concluimos que no hay diferencias significativas entre los grupos.\n")
+      if(input$prueba_normal == "shapiro") {
+        cat("=== PRUEBA DE SHAPIRO-WILK ===\n")
+        if(length(var) > 5000) {
+          cat("Advertencia: Shapiro-Wilk es recomendable para muestras < 5000\n")
+          cat("Considera usar Kolmogorov-Smirnov o Anderson-Darling\n\n")
         }
-        
-      } else if (num_grupos >= 3) {
-        modelo <- aov(valor ~ grupo, data = datos())
-        
-        cat("**Resumen:**\n")
-        cat("========================================\n")
-        for (g in levels(datos()$grupo)) {
-          cuenta <- sum(datos()$grupo == g)
-          suma <- sum(datos()$valor[datos()$grupo == g])
-          promedio <- mean(datos()$valor[datos()$grupo == g])
-          varianza <- var(datos()$valor[datos()$grupo == g])
-          
-          cat(paste("Tratamiento", g, ": Cuenta =", cuenta, ", Suma =", suma, ", Promedio =", round(promedio, 2), ", Varianza =", round(varianza, 2), "\n"))
-        }
-        
-        cat("\n**ANÁLISIS DE VARIANZA:**\n")
-        cat("========================================\n")
-        
-        resultado_anova <- summary(modelo)
-        
-        suma_cuadrados_entre <- sum(resultado_anova[[1]]$`Sum Sq`[1])
-        suma_cuadrados_dentro <- sum(resultado_anova[[1]]$`Sum Sq`[2])
-        grados_libertad_entre <- length(levels(datos()$grupo)) - 1
-        grados_libertad_dentro <- length(datos()$valor) - length(levels(datos()$grupo))
-        promedio_cuadrados_entre <- suma_cuadrados_entre / grados_libertad_entre
-        promedio_cuadrados_dentro <- suma_cuadrados_dentro / grados_libertad_dentro
-        estadistico_F <- promedio_cuadrados_entre / promedio_cuadrados_dentro
-        valor_p_anova <- resultado_anova[[1]]$`Pr(>F)`[1]
-        valor_critico_F <- qf(0.95, grados_libertad_entre, grados_libertad_dentro)
-        
-        cat("Origen de las variaciones\n")
-        cat("========================================\n")
-        cat(paste("Entre grupos:\nSuma de cuadrados =", round(suma_cuadrados_entre, 2), 
-                  "\nGrados de libertad =", grados_libertad_entre,
-                  "\nPromedio de los cuadrados =", round(promedio_cuadrados_entre, 2), 
-                  "\nF =", round(estadistico_F, 2), 
-                  "\nProbabilidad =", round(valor_p_anova, 4),
-                  "\nValor crítico para F =", round(valor_critico_F, 2), "\n"))
-        cat(paste("\nDentro de los grupos:\nSuma de cuadrados =", round(suma_cuadrados_dentro, 2),
-                  "\nGrados de libertad =", grados_libertad_dentro,
-                  "\nPromedio de los cuadrados =", round(promedio_cuadrados_dentro, 2), "\n"))
-        
-        cat("\nTotal: Suma de cuadrados =", round(suma_cuadrados_entre + suma_cuadrados_dentro, 2), 
-            ", Grados de libertad =", grados_libertad_entre + grados_libertad_dentro, "\n")
-        
-        cat("\n**Interpretación de ANOVA:**\n")
-        if (estadistico_F > valor_critico_F) {
-          cat("El valor F calculado (", round(estadistico_F, 2), ") es mayor que el valor crítico F (", round(valor_critico_F, 2), ").\n")
-          cat("Esto significa que hay diferencias significativas entre al menos uno de los grupos.\n")
-          cat("Por lo tanto, **rechazamos** la hipótesis nula de que todas las medias de los grupos son iguales.\n")
-        } else {
-          cat("El valor F calculado (", round(estadistico_F, 2), ") es menor que el valor crítico F (", round(valor_critico_F, 2), ").\n")
-          cat("Esto significa que **no rechazamos** la hipótesis nula y concluimos que no hay diferencias significativas entre los grupos.\n")
-        }
-        
-        cat("\n**Resultado de Tukey (comparación entre grupos):**\n")
-        cat("====================================\n")
-        tukey_resultado <- TukeyHSD(modelo)
-        
-        resumen_tukey <- tukey_resultado$grupo
-        colnames(resumen_tukey) <- c("Diferencia de medias", "Límite Inferior", "Límite Superior", "p ajustado")
-        
-        print(resumen_tukey)
-        
-        cat("\n**Interpretación de Tukey:**\n")
-        cat("Si el valor p de Tukey es menor a 0.05, hay diferencias significativas entre los grupos comparados.\n")
-        
-      } else {
-        cat("⚠️ Debe haber al menos 2 grupos para hacer la comparación.\n")
+        prueba <- shapiro.test(var)
+        print(prueba)
+      } else if(input$prueba_normal == "ks") {
+        cat("=== PRUEBA DE KOLMOGOROV-SMIRNOV ===\n")
+        prueba <- ks.test(var, "pnorm", mean = mean(var), sd = sd(var))
+        print(prueba)
+      } else if(input$prueba_normal == "ad") {
+        cat("=== PRUEBA DE ANDERSON-DARLING ===\n")
+        prueba <- ad.test(var)
+        print(prueba)
+      } else if(input$prueba_normal == "lillie") {
+        cat("=== PRUEBA DE LILLIEFORS ===\n")
+        prueba <- lillie.test(var)
+        print(prueba)
       }
       
-    }, error = function(e) {
-      cat("⚠️ Datos en espera:", e$message)
+      cat("\nINTERPRETACIÓN:\n")
+      cat("p-value > 0.05: No se rechaza normalidad\n")
+      cat("p-value <= 0.05: Se rechaza normalidad\n")
+    })
+    
+    output$grafico_normalidad <- renderPlot({
+      req(input$var_normal)
+      var <- datos()[[input$var_normal]]
+      df <- data.frame(valor = var)
+      
+      p1 <- ggplot(df, aes(x = valor)) +
+        geom_histogram(aes(y = ..density..), bins = 30, fill = "steelblue", color = "white") +
+        geom_density(color = "red") +
+        labs(title = "Histograma con curva normal", x = input$var_normal) +
+        theme_minimal()
+      
+      p2 <- ggplot(df, aes(sample = valor)) +
+        stat_qq() + stat_qq_line() +
+        labs(title = "Q-Q Plot") +
+        theme_minimal()
+      
+      gridExtra::grid.arrange(p1, p2, ncol = 2)
     })
   })
   
+  observeEvent(input$calcular_comp, {
+    output$resultado_comparacion <- renderPrint({
+      req(input$var_resp, input$var_grupo)
+      resp <- datos()[[input$var_resp]]
+      grupo <- datos()[[input$var_grupo]]
+      
+      if(input$prueba_comp == "t.test") {
+        cat("=== PRUEBA T DE STUDENT ===\n")
+        if(input$tipo_t == "indep") {
+          prueba <- t.test(resp ~ grupo)
+        } else {
+          prueba <- t.test(resp ~ grupo, paired = TRUE)
+        }
+        print(prueba)
+      } else if(input$prueba_comp == "anova") {
+        cat("=== ANÁLISIS DE VARIANZA (ANOVA) ===\n")
+        modelo <- aov(resp ~ grupo)
+        print(summary(modelo))
+        
+        if(summary(modelo)[[1]]$`Pr(>F)`[1] < 0.05) {
+          cat("\n=== PRUEBA POST-HOC (Tukey HSD) ===\n")
+          print(TukeyHSD(modelo))
+        }
+      } else if(input$prueba_comp == "welch") {
+        cat("=== PRUEBA T DE WELCH (VARIANZAS DESIGUALES) ===\n")
+        prueba <- t.test(resp ~ grupo, var.equal = FALSE)
+        print(prueba)
+      } else if(input$prueba_comp == "kruskal") {
+        cat("=== PRUEBA DE KRUSKAL-WALLIS (NO PARAMÉTRICA) ===\n")
+        prueba <- kruskal.test(resp ~ grupo)
+        print(prueba)
+      }
+    })
+    
+    output$grafico_comparacion <- renderPlot({
+      req(input$var_resp, input$var_grupo)
+      resp <- datos()[[input$var_resp]]
+      grupo <- datos()[[input$var_grupo]]
+      df <- data.frame(resp = resp, grupo = grupo)
+      
+      ggplot(df, aes(x = grupo, y = resp, fill = grupo)) +
+        geom_boxplot() +
+        stat_summary(fun = mean, geom = "point", shape = 20, size = 5, color = "red") +
+        labs(title = paste("Comparación de", input$var_resp, "por", input$var_grupo),
+             x = input$var_grupo, y = input$var_resp) +
+        theme_minimal() +
+        theme(legend.position = "none")
+    })
+  })
   
-  
-  output$boxplot <- renderPlot({
-    req(datos())
-    ggplot(datos(), aes(x = grupo, y = valor, fill = grupo)) +
-      geom_boxplot(alpha = 0.8, color = "black", outlier.color = "red") +
-      scale_fill_brewer(palette = "Set2") +
-      labs(title = "Distribución de los Grupos", x = "Grupo", y = "Valor") +
-      theme_minimal(base_size = 14)
+  observeEvent(input$calcular_reg, {
+    output$resultado_regresion <- renderPrint({
+      req(input$var_x, input$var_y)
+      x <- datos()[[input$var_x]]
+      y <- datos()[[input$var_y]]
+      
+      if(input$tipo_analisis == "cor") {
+        cat("=== ANÁLISIS DE CORRELACIÓN ===\n")
+        cor_test <- cor.test(x, y, method = input$metodo_cor)
+        print(cor_test)
+        
+        cat("\nCoeficiente de correlación:", cor_test$estimate, "\n")
+        cat("Interpretación:\n")
+        valor <- abs(cor_test$estimate)
+        if(valor < 0.3) cat("Correlación muy débil\n")
+        else if(valor < 0.5) cat("Correlación débil\n")
+        else if(valor < 0.7) cat("Correlación moderada\n")
+        else if(valor < 0.9) cat("Correlación fuerte\n")
+        else cat("Correlación muy fuerte\n")
+      } else if(input$tipo_analisis == "reg") {
+        cat("=== REGRESIÓN LINEAL ===\n")
+        modelo <- lm(y ~ x)
+        print(summary(modelo))
+        
+        cat("\nEcuación de regresión:\n")
+        cat("y =", coef(modelo)[1], "+", coef(modelo)[2], "* x\n")
+      }
+    })
+    
+    output$grafico_regresion <- renderPlot({
+      req(input$var_x, input$var_y)
+      x <- datos()[[input$var_x]]
+      y <- datos()[[input$var_y]]
+      df <- data.frame(x = x, y = y)
+      
+      if(input$tipo_analisis == "disp") {
+        ggplot(df, aes(x = x, y = y)) +
+          geom_point() +
+          geom_smooth(method = "lm", se = TRUE, color = "red") +
+          labs(title = paste("Diagrama de dispersión:", input$var_y, "vs", input$var_x),
+               x = input$var_x, y = input$var_y) +
+          theme_minimal()
+      } else if(input$tipo_analisis == "reg") {
+        modelo <- lm(y ~ x)
+        df$predicted <- predict(modelo)
+        df$residuals <- residuals(modelo)
+        
+        p1 <- ggplot(df, aes(x = x, y = y)) +
+          geom_point() +
+          geom_line(aes(y = predicted), color = "red") +
+          labs(title = "Regresión lineal", x = input$var_x, y = input$var_y) +
+          theme_minimal()
+        
+        p2 <- ggplot(df, aes(x = predicted, y = residuals)) +
+          geom_point() +
+          geom_hline(yintercept = 0, linetype = "dashed") +
+          labs(title = "Residuos vs Ajustados", x = "Valores ajustados", y = "Residuos") +
+          theme_minimal()
+        
+        gridExtra::grid.arrange(p1, p2, ncol = 2)
+      }
+    })
   })
 }
 
-shinyApp(ui = ui, server = server)
+shinyApp(ui, server)
